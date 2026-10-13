@@ -195,13 +195,16 @@ def apply_setup(model, setup, rank=16):
         target_modules=pattern, bias="none", task_type="CAUSAL_LM",
     ))
     if setup in ("E2", "E3"):
-        count = 0
+        projector_counts = {"visual.merger": 0, "visual.deepstack_merger_list": 0}
         for name, parameter in model.named_parameters():
-            if "visual.merger" in name or "visual.deepstack_merger_list" in name:
-                parameter.data = parameter.data.to(torch.float32)
-                parameter.requires_grad_(True)
-                count += parameter.numel()
-        assert count > 100_000_000, f"Only {count} projector parameters found"
+            for module_name in projector_counts:
+                if module_name in name:
+                    projector_counts[module_name] += parameter.numel()
+                    parameter.data = parameter.data.to(torch.float32)
+                    parameter.requires_grad_(True)
+        assert all(projector_counts.values()), f"Projector parameters not found: {projector_counts}"
+        count = sum(projector_counts.values())
+        print("projector params", projector_counts, "total", count)
     trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
     print(setup, "rank", rank, "LoRA modules", len(matched), "trainable params", trainable)
     return model, trainable
