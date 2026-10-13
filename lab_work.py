@@ -206,8 +206,11 @@ def apply_setup(model, setup, rank=16):
         count = sum(projector_counts.values())
         print("projector params", projector_counts, "total", count)
     for parameter in model.parameters():
-        if parameter.requires_grad and parameter.dtype != torch.float32:
-            parameter.data = parameter.data.to(torch.float32)
+        if parameter.requires_grad:
+            if parameter.dtype != torch.float32:
+                parameter.data = parameter.data.to(torch.float32)
+            if hasattr(parameter, "grad_dtype"):
+                parameter.grad_dtype = torch.float32
     trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
     assert all(parameter.dtype == torch.float32 for parameter in model.parameters()
                if parameter.requires_grad), "Trainable parameters must be FP32 for GradScaler"
@@ -305,9 +308,6 @@ def train(name, setup, processor, train_fraction=1.0, drive_root=None):
                     raise FloatingPointError(f"Non-finite loss at step {step}")
                 scaler.scale(loss).backward()
                 total_loss += loss.item()
-            for parameter in parameters:
-                if parameter.grad is not None and parameter.grad.dtype != torch.float32:
-                    parameter.grad = parameter.grad.to(torch.float32)
             assert all(parameter.grad is None or parameter.grad.dtype == torch.float32
                        for parameter in parameters), "GradScaler requires FP32 trainable gradients"
             scaler.unscale_(optimizer)
