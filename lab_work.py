@@ -303,6 +303,11 @@ def train(name, setup, processor, train_fraction=1.0, drive_root=None):
                 raise FloatingPointError(f"Non-finite loss at step {step}")
             scaler.scale(loss).backward()
             total_loss += loss.item()
+        for parameter in parameters:
+            if parameter.grad is not None and parameter.grad.dtype != torch.float32:
+                parameter.grad = parameter.grad.to(torch.float32)
+        assert all(parameter.grad is None or parameter.grad.dtype == torch.float32
+                   for parameter in parameters), "GradScaler requires FP32 trainable gradients"
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(parameters, 1.0)
         scaler.step(optimizer)
