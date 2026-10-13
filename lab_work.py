@@ -312,6 +312,15 @@ def train(name, setup, processor, train_fraction=1.0, drive_root=None):
                        for parameter in parameters), "GradScaler requires FP32 trainable gradients"
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(parameters, 1.0)
+            if step == 1:
+                for parameter in parameters:
+                    state = optimizer.state[parameter]
+                    state["step"] = torch.zeros((), dtype=torch.float32)
+                    state["exp_avg"] = torch.zeros_like(parameter, dtype=torch.float32)
+                    state["exp_avg_sq"] = torch.zeros_like(parameter, dtype=torch.float32)
+                assert all(optimizer.state[parameter]["exp_avg"].dtype == torch.float32
+                           and optimizer.state[parameter]["exp_avg_sq"].dtype == torch.float32
+                           for parameter in parameters), "AdamW states must be FP32"
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
