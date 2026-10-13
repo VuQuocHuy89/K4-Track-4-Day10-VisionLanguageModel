@@ -205,7 +205,12 @@ def apply_setup(model, setup, rank=16):
         assert all(projector_counts.values()), f"Projector parameters not found: {projector_counts}"
         count = sum(projector_counts.values())
         print("projector params", projector_counts, "total", count)
+    for parameter in model.parameters():
+        if parameter.requires_grad and parameter.dtype != torch.float32:
+            parameter.data = parameter.data.to(torch.float32)
     trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+    assert all(parameter.dtype == torch.float32 for parameter in model.parameters()
+               if parameter.requires_grad), "Trainable parameters must be FP32 for GradScaler"
     print(setup, "rank", rank, "LoRA modules", len(matched), "trainable params", trainable)
     return model, trainable
 
