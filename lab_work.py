@@ -273,62 +273,67 @@ def train(name, setup, processor, train_fraction=1.0, drive_root=None):
         collate_fn=lambda batch: collate(batch, processor.tokenizer.pad_token_id),
         generator=torch.Generator().manual_seed(42),
     )
-    model, trainable = apply_setup(load_model(), setup)
-    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-    model.config.use_cache = False
-    parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    optimizer = torch.optim.AdamW(parameters, lr=2e-4, weight_decay=0)
-    warmup = 15
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, lambda step: (step + 1) / warmup if step < warmup else
-        0.5 * (1 + math.cos(math.pi * (step - warmup) / (300 - warmup))),
-    )
-    scaler = torch.amp.GradScaler("cuda")
-    model.train()
-    torch.cuda.reset_peak_memory_stats()
-    start = time.perf_counter()
-    iterator = iter(loader)
-    for step in range(1, 301):
-        total_loss = 0.0
-        for _ in range(8):
-            try:
-                batch = next(iterator)
-            except StopIteration:
-                iterator = iter(loader)
-                batch = next(iterator)
-            batch = {key: value.to("cuda") for key, value in batch.items()}
-            with torch.autocast("cuda", dtype=torch.float16):
-                loss = model(**batch).loss / 8
-            if not torch.isfinite(loss):
-                raise FloatingPointError(f"Non-finite loss at step {step}")
-            scaler.scale(loss).backward()
-            total_loss += loss.item()
-        for parameter in parameters:
-            if parameter.grad is not None and parameter.grad.dtype != torch.float32:
-                parameter.grad = parameter.grad.to(torch.float32)
-        assert all(parameter.grad is None or parameter.grad.dtype == torch.float32
-                   for parameter in parameters), "GradScaler requires FP32 trainable gradients"
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(parameters, 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
-        scheduler.step()
-        if step % 25 == 0:
-            print(f"{name}: step {step}/300, loss {total_loss:.4f}")
-        if step % 100 == 0:
-            save_checkpoint(model, name, setup, drive_root)
-    metadata = {
-        "trainable_params": trainable,
-        "peak_vram_gb": torch.cuda.max_memory_allocated() / 1024**3,
-        "train_minutes": (time.perf_counter() - start) / 60,
-    }
-    assert all(value > 0 for value in metadata.values())
-    Path(f"work/{name}_run.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    del optimizer, model
-    gc.collect()
-    torch.cuda.empty_cache()
-    return metadata
+    model = optimizer = scheduler = scaler = parameters = batch = loss = iterator = parameter = None
+    try:
+        model, trainable = apply_setup(load_model(), setup)
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.config.use_cache = False
+        parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+        optimizer = torch.optim.AdamW(parameters, lr=2e-4, weight_decay=0)
+        warmup = 15
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lambda step: (step + 1) / warmup if step < warmup else
+            0.5 * (1 + math.cos(math.pi * (step - warmup) / (300 - warmup))),
+        )
+        scaler = torch.amp.GradScaler("cuda")
+        model.train()
+        torch.cuda.reset_peak_memory_stats()
+        start = time.perf_counter()
+        iterator = iter(loader)
+        for step in range(1, 301):
+            total_loss = 0.0
+            for _ in range(8):
+                try:
+                    batch = next(iterator)
+                except StopIteration:
+                    iterator = iter(loader)
+                    batch = next(iterator)
+                batch = {key: value.to("cuda") for key, value in batch.items()}
+                with torch.autocast("cuda", dtype=torch.float16):
+                    loss = model(**batch).loss / 8
+                if not torch.isfinite(loss):
+                    raise FloatingPointError(f"Non-finite loss at step {step}")
+                scaler.scale(loss).backward()
+                total_loss += loss.item()
+            for parameter in parameters:
+                if parameter.grad is not None and parameter.grad.dtype != torch.float32:
+                    parameter.grad = parameter.grad.to(torch.float32)
+            assert all(parameter.grad is None or parameter.grad.dtype == torch.float32
+                       for parameter in parameters), "GradScaler requires FP32 trainable gradients"
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(parameters, 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+            scheduler.step()
+            if step % 25 == 0:
+                print(f"{name}: step {step}/300, loss {total_loss:.4f}")
+            if step % 100 == 0:
+                save_checkpoint(model, name, setup, drive_root)
+        metadata = {
+            "trainable_params": trainable,
+            "peak_vram_gb": torch.cuda.max_memory_allocated() / 1024**3,
+            "train_minutes": (time.perf_counter() - start) / 60,
+        }
+        assert all(value > 0 for value in metadata.values())
+        Path(f"work/{name}_run.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        return metadata
+    finally:
+        if optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+        optimizer = model = scheduler = scaler = parameters = batch = loss = iterator = parameter = None
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 def score(name, prediction_path, metadata=None, out=None):
@@ -359,10 +364,12 @@ def run_trained(name, setup, processor, train_fraction=1.0, drive_root=None):
 
     metadata = train(name, setup, processor, train_fraction, drive_root)
     model = load_checkpoint(name, setup, drive_root)
-    prediction_path = predict(model, processor, "test", f"work/{name.lower()}.jsonl")
-    del model
-    gc.collect()
-    torch.cuda.empty_cache()
+    try:
+        prediction_path = predict(model, processor, "test", f"work/{name.lower()}.jsonl")
+    finally:
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
     result = score(name, prediction_path, metadata)
     sync_outputs(drive_root)
     return result
