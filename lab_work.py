@@ -269,7 +269,7 @@ def train(name, setup, processor, train_fraction=1.0, drive_root=None):
             return encode_example(rows[index], processor)
 
     loader = DataLoader(
-        Examples(), batch_size=2, shuffle=True, num_workers=0,
+        Examples(), batch_size=1, shuffle=True, num_workers=0,
         collate_fn=lambda batch: collate(batch, processor.tokenizer.pad_token_id),
         generator=torch.Generator().manual_seed(42),
     )
@@ -290,7 +290,7 @@ def train(name, setup, processor, train_fraction=1.0, drive_root=None):
     iterator = iter(loader)
     for step in range(1, 301):
         total_loss = 0.0
-        for _ in range(4):
+        for _ in range(8):
             try:
                 batch = next(iterator)
             except StopIteration:
@@ -298,7 +298,7 @@ def train(name, setup, processor, train_fraction=1.0, drive_root=None):
                 batch = next(iterator)
             batch = {key: value.to("cuda") for key, value in batch.items()}
             with torch.autocast("cuda", dtype=torch.float16):
-                loss = model(**batch).loss / 4
+                loss = model(**batch).loss / 8
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Non-finite loss at step {step}")
             scaler.scale(loss).backward()
