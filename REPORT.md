@@ -20,7 +20,7 @@ Theo GUIDE, LLM và embedding khoảng 4,0 tỷ tham số, khối thị giác (V
 E0 có `parse_valid_rate` = 0,7942 (247/311 output hợp lệ). Hai lỗi thường gặp là output không parse được (64 ảnh; ví dụ `vlcsnap-00200` lặp khóa `bbox_2d` nhiều lần) và bỏ sót vật thể (FN = 548). Ví dụ output thô nguyên văn của `vlcsnap-00201` là `[]`, dù ảnh này có một crack và một manhole trong nhãn thật.
 
 ### Câu 3 — Thang 0–1000: nếu chấm output theo pixel (hoặc ngược lại) thì F1 ra sao và vì sao? Bạn đã kiểm chứng điều này thế nào?
-Nhãn và prompt dùng tọa độ chuẩn hóa 0–1000. `score.py` chỉ đổi tọa độ sang thang này khi chọn `--coord pixel`, bằng cách chia cho chiều rộng/cao ảnh rồi nhân 1000. Nếu chấm output 0–1000 như pixel, box bị phóng to và lệch, làm IoU và F1 giảm. Các evidence hiện có đều chấm với `coord=norm1000`; chưa có kết quả F1 từ lần chấm sai thang nên không ghi số giả.
+Nhãn và prompt dùng tọa độ chuẩn hóa 0–1000. Tôi chấm lại cùng `e1.jsonl` trên 311 ảnh test bằng `score.py`: `coord=norm1000` cho F1 = 0,2672 (TP = 146), còn `coord=pixel` cho F1 = 0,0000 (TP = 0, FP = 510, FN = 583). Khi coi output 0–1000 là pixel, scorer nhân tọa độ x với 1000/640 và y với 1000/360; box bị phóng to, lệch khỏi nhãn thật nên không đạt IoU 0,5.
 
 ### Câu 4 — Mask loss: vì sao chỉ tính loss trên phần trả lời? Điều gì xảy ra nếu tính trên cả prompt và token ảnh?
 `encode_example` gán `labels=-100` cho toàn bộ token prompt và chỉ giữ nhãn phần trả lời; kiểm tra trong notebook xác nhận phần nhãn giải mã thành JSON đáp án. Nếu tính loss trên prompt/token ảnh, phần lớn tín hiệu tối ưu sẽ dùng để học lặp lại đầu vào thay vì dự đoán box, làm lệch mục tiêu của bài toán.
